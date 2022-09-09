@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vmware/vsphere-automation-sdk-go/services/nsxt/model"
 	v1 "k8s.io/api/core/v1"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/sets"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -112,8 +112,8 @@ func (r *SecurityPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return resultNormal, nil
 		}
 
-		if err := r.Service.OperateSecurityPolicy(obj); err != nil {
-			log.Error(err, "operate failed, would retry exponentially", "securitypolicy", req.NamespacedName)
+		if err := r.Service.CreateOrUpdateSecurityPolicy(obj); err != nil {
+			log.Error(err, "failed to create or update security policy CR", "securitypolicy", req.NamespacedName)
 			updateFail(r, &ctx, obj, &err)
 			return resultRequeue, err
 		}
@@ -121,7 +121,7 @@ func (r *SecurityPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	} else {
 		if controllerutil.ContainsFinalizer(obj, util.FinalizerName) {
 			metrics.CounterInc(r.Service.NSXConfig, metrics.ControllerDeleteTotal, METRIC_RES_TYPE)
-			if err := r.Service.DeleteSecurityPolicy(obj.UID); err != nil {
+			if err := r.Service.DeleteSecurityPolicy(obj); err != nil {
 				log.Error(err, "delete failed, would retry exponentially", "securitypolicy", req.NamespacedName)
 				deleteFail(r, &ctx, obj, &err)
 				return resultRequeue, err
@@ -222,10 +222,23 @@ func getExistingConditionOfType(conditionType v1alpha1.SecurityPolicyStatusCondi
 	return nil
 }
 
+func containsString(source []string, target string) bool {
+	for _, item := range source {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *SecurityPolicyReconciler) setupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.SecurityPolicy{}).
 		WithEventFilter(predicate.Funcs{
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				// Ignore updates to CR status in which case metadata.Generation does not change
+				return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+			},
 			DeleteFunc: func(e event.DeleteEvent) bool {
 				// Suppress Delete events to avoid filtering them out in the Reconcile function
 				return false
@@ -260,10 +273,13 @@ func (r *SecurityPolicyReconciler) GarbageCollector(cancel chan bool, timeout ti
 			return
 		case <-time.After(timeout):
 		}
-		nsxPolicySet := r.Service.ListSecurityPolicyID()
-		if len(nsxPolicySet) == 0 {
+
+		keys := r.Service.ListSecurityPolicyKeys()
+		if len(keys) == 0 {
 			continue
 		}
+
+		policyMap := make(map[string]v1alpha1.SecurityPolicy)
 		policyList := &v1alpha1.SecurityPolicyList{}
 		err := r.Client.List(ctx, policyList)
 		if err != nil {
@@ -271,22 +287,31 @@ func (r *SecurityPolicyReconciler) GarbageCollector(cancel chan bool, timeout ti
 			continue
 		}
 
-		CRPolicySet := sets.NewString()
 		for _, policy := range policyList.Items {
-			CRPolicySet.Insert(string(policy.UID))
+			policyMap[string(policy.UID)] = policy
 		}
 
-		for elem := range nsxPolicySet {
-			if CRPolicySet.Has(elem) {
+		for _, key := range keys {
+			t, exists, err := r.Service.SecurityPolicyStore.GetByKey(key)
+			if err != nil || !exists {
+				log.Error(err, "failed to get security policy from store")
 				continue
 			}
-			log.V(1).Info("GC collected SecurityPolicy CR", "UID", elem)
-			metrics.CounterInc(r.Service.NSXConfig, metrics.ControllerDeleteTotal, METRIC_RES_TYPE)
-			err = r.Service.DeleteSecurityPolicy(types.UID(elem))
-			if err != nil {
-				metrics.CounterInc(r.Service.NSXConfig, metrics.ControllerDeleteFailTotal, METRIC_RES_TYPE)
-			} else {
-				metrics.CounterInc(r.Service.NSXConfig, metrics.ControllerDeleteSuccessTotal, METRIC_RES_TYPE)
+			nsxPolicy := t.(model.SecurityPolicy)
+			for _, tag := range nsxPolicy.Tags {
+				if *tag.Scope == util.TagScopeSecurityPolicyCRUID {
+					nsxPolicyUID := *tag.Tag
+					if policy, ok := policyMap[nsxPolicyUID]; !ok {
+						log.V(1).Info("GC collected SecurityPolicy CR", "policy", policy)
+						metrics.CounterInc(r.Service.NSXConfig, metrics.ControllerDeleteTotal, METRIC_RES_TYPE)
+						err = r.Service.DeleteSecurityPolicy(&nsxPolicy)
+						if err != nil {
+							metrics.CounterInc(r.Service.NSXConfig, metrics.ControllerDeleteFailTotal, METRIC_RES_TYPE)
+						} else {
+							metrics.CounterInc(r.Service.NSXConfig, metrics.ControllerDeleteSuccessTotal, METRIC_RES_TYPE)
+						}
+					}
+				}
 			}
 		}
 	}

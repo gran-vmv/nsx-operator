@@ -16,7 +16,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/sets"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -202,11 +201,17 @@ func TestSecurityPolicyReconciler_Reconcile(t *testing.T) {
 	defer checkNsxVersionPatch.Reset()
 
 	// DeletionTimestamp.IsZero = ture, client update failed
+	sp = &v1alpha1.SecurityPolicy{}
 	k8sClient.EXPECT().Get(ctx, gomock.Any(), sp).Return(nil)
 	err = errors.New("Update failed")
 	k8sClient.EXPECT().Update(ctx, gomock.Any()).Return(err)
 	_, ret = r.Reconcile(ctx, req)
 	assert.Equal(t, err, ret)
+
+	patches = gomonkey.ApplyFunc(updateFail,
+		func(r *SecurityPolicyReconciler, c *context.Context, o *v1alpha1.SecurityPolicy, e *error) {
+		})
+	defer patches.Reset()
 
 	//  DeletionTimestamp.IsZero = false, Finalizers doesn't include util.FinalizerName
 	k8sClient.EXPECT().Get(ctx, gomock.Any(), sp).Return(nil).Do(func(_ context.Context, _ client.ObjectKey, obj client.Object) error {
@@ -215,7 +220,7 @@ func TestSecurityPolicyReconciler_Reconcile(t *testing.T) {
 		v1sp.ObjectMeta.DeletionTimestamp = &time
 		return nil
 	})
-	patch := gomonkey.ApplyMethod(reflect.TypeOf(service), "DeleteSecurityPolicy", func(_ *services.SecurityPolicyService, UID types.UID) error {
+	patch := gomonkey.ApplyMethod(reflect.TypeOf(service), "DeleteSecurityPolicy", func(_ *services.SecurityPolicyService, obj interface{}) error {
 		assert.FailNow(t, "should not be called")
 		return nil
 	})
@@ -232,7 +237,7 @@ func TestSecurityPolicyReconciler_Reconcile(t *testing.T) {
 		v1sp.Finalizers = []string{util.FinalizerName}
 		return nil
 	})
-	patch = gomonkey.ApplyMethod(reflect.TypeOf(service), "DeleteSecurityPolicy", func(_ *services.SecurityPolicyService, UID types.UID) error {
+	patch = gomonkey.ApplyMethod(reflect.TypeOf(service), "DeleteSecurityPolicy", func(_ *services.SecurityPolicyService, obj interface{}) error {
 		return nil
 	})
 	_, ret = r.Reconcile(ctx, req)
@@ -240,90 +245,20 @@ func TestSecurityPolicyReconciler_Reconcile(t *testing.T) {
 	patch.Reset()
 }
 
-func TestSecurityPolicyReconciler_GarbageCollector(t *testing.T) {
-	// gc collect item "2345", local store has more item than k8s cache
-	service := &services.SecurityPolicyService{
-		NSXConfig: &config.NSXOperatorConfig{
-			NsxConfig: &config.NsxConfig{
-				EnforcementPoint: "vmc-enforcementpoint",
-			},
-		},
-	}
-	patch := gomonkey.ApplyMethod(reflect.TypeOf(service), "ListSecurityPolicyID", func(_ *services.SecurityPolicyService) sets.String {
-		a := sets.NewString()
-		a.Insert("1234")
-		a.Insert("2345")
-		return a
-	})
-	patch.ApplyMethod(reflect.TypeOf(service), "DeleteSecurityPolicy", func(_ *services.SecurityPolicyService, UID types.UID) error {
-		assert.Equal(t, string(UID), "2345")
-		return nil
-	})
-	cancel := make(chan bool)
-	defer patch.Reset()
-	mockCtl := gomock.NewController(t)
-	k8sClient := mock_client.NewMockClient(mockCtl)
+func Test_containsString(t *testing.T) {
+	target := "hello"
+	source := []string{"hello", "world"}
+	assert.True(t, containsString(source, target))
 
-	r := &SecurityPolicyReconciler{
-		Client:  k8sClient,
-		Scheme:  nil,
-		Service: service,
-	}
-	ctx := context.Background()
-	policyList := &v1alpha1.SecurityPolicyList{}
-	k8sClient.EXPECT().List(ctx, policyList).Return(nil).Do(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
-		a := list.(*v1alpha1.SecurityPolicyList)
-		a.Items = append(a.Items, v1alpha1.SecurityPolicy{})
-		a.Items[0].ObjectMeta = metav1.ObjectMeta{}
-		a.Items[0].UID = "1234"
-		return nil
-	})
-	go func() {
-		time.Sleep(1 * time.Second)
-		cancel <- true
-	}()
-	r.GarbageCollector(cancel, time.Second)
+	target = "go home"
+	assert.False(t, containsString(source, target))
 
-	// local store has same item as k8s cache
-	patch.Reset()
-	patch.ApplyMethod(reflect.TypeOf(service), "ListSecurityPolicyID", func(_ *services.SecurityPolicyService) sets.String {
-		a := sets.NewString()
-		a.Insert("1234")
-		return a
-	})
-	patch.ApplyMethod(reflect.TypeOf(service), "DeleteSecurityPolicy", func(_ *services.SecurityPolicyService, UID types.UID) error {
-		assert.FailNow(t, "should not be called")
-		return nil
-	})
-	k8sClient.EXPECT().List(gomock.Any(), policyList).Return(nil).Do(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
-		a := list.(*v1alpha1.SecurityPolicyList)
-		a.Items = append(a.Items, v1alpha1.SecurityPolicy{})
-		a.Items[0].ObjectMeta = metav1.ObjectMeta{}
-		a.Items[0].UID = "1234"
-		return nil
-	})
-	go func() {
-		time.Sleep(1 * time.Second)
-		cancel <- true
-	}()
-	r.GarbageCollector(cancel, time.Second)
+	source = []string{}
+	assert.False(t, containsString(source, target))
 
-	// local store has no item
-	patch.Reset()
-	patch.ApplyMethod(reflect.TypeOf(service), "ListSecurityPolicyID", func(_ *services.SecurityPolicyService) sets.String {
-		a := sets.NewString()
-		return a
-	})
-	patch.ApplyMethod(reflect.TypeOf(service), "DeleteSecurityPolicy", func(_ *services.SecurityPolicyService, UID types.UID) error {
-		assert.FailNow(t, "should not be called")
-		return nil
-	})
-	k8sClient.EXPECT().List(ctx, policyList).Return(nil).Times(0)
-	go func() {
-		time.Sleep(1 * time.Second)
-		cancel <- true
-	}()
-	r.GarbageCollector(cancel, time.Second)
+	target = ""
+	source = []string{"hello", "world"}
+	assert.False(t, containsString(source, target))
 }
 
 func TestSecurityPolicyReconciler_Start(t *testing.T) {

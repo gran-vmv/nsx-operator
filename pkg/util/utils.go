@@ -59,6 +59,15 @@ func RemoveDuplicateStr(strSlice []string) []string {
 	return resultStr
 }
 
+func Contains(s []string, str string) bool {
+	for _, v := range s {
+		if v == str {
+			return true
+		}
+	}
+	return false
+}
+
 func ToUpper(obj interface{}) string {
 	str := fmt.Sprintf("%s", obj)
 	return strings.ToUpper(str)

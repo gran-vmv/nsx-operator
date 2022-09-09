@@ -19,10 +19,10 @@ NSX-T Distributed Firewall rules, then update CR status with realized state.
 
 ## CRD Design
 
-SecurityPolicy is Namespaced scope CRD, admins could apply CR within a namespace to configure security of workloads
-which are attached to NSX-T networking. Compared with standard K8s NetworkPolicies, SecurityPolicy CRD adds `vmSelector`
-to select VMs, it also introduces some rule syntax including Drop and Reject actions, priority, rule level
-selectors(`appliedTo`).
+SecurityPolicy is Namespaced scope CRD, admins could apply CR within a namespace to
+Compared with standard K8s NetworkPolicies, SecurityPolicy CRD adds `VMSelector` to
+select VMs, it also introduces some rule syntaxes including Drop and Reject actions,
+priority, rule level selectors(`appliedTo`).
 
 An example of SecurityPolicy CR:
 
@@ -82,7 +82,7 @@ to access through TCP with port 8000. The second rule allows the selected VMs to
 access Pods with label "role: dns" through UDP with port 53. The third and forth
 rules are to drop any other ingress and egress traffic to/from the selected VMs.
 
-Below are explanations for the fields:
+Below are explainations for the fields:
 
 **spec**: defines all the configurations for a SecurityPolicy CR.
 
