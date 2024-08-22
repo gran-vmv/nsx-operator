@@ -7,15 +7,12 @@ type AddressBindingSpec struct {
 	VMName string `json:"vmName"`
 	// InterfaceName contains the interface name of the VM, if not set, the first interface of the VM will be used
 	InterfaceName string `json:"interfaceName,omitempty"`
-}
-
-type AddressBindingStatus struct {
-	IPAddress string `json:"ipAddress"`
+	// InterfaceName contains the allocated IPAddress
+	IPAddress string `json:"ipAddress,omitempty"`
 }
 
 // +genclient
 //+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
 //+kubebuilder:storageversion
 
 // AddressBinding is used to manage 1:1 NAT for a VM/NetworkInterface.
@@ -23,8 +20,7 @@ type AddressBinding struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   AddressBindingSpec   `json:"spec"`
-	Status AddressBindingStatus `json:"status"`
+	Spec AddressBindingSpec `json:"spec"`
 }
 
 //+kubebuilder:object:root=true

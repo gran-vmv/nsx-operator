@@ -42,24 +42,17 @@ spec:
                 description: InterfaceName contains the interface name of the VM,
                   if not set, the first interface of the VM will be used
                 type: string
+              ipAddress:
+                description: InterfaceName contains the allocated IPAddress
+                type: string
               vmName:
                 description: VMName contains the VM's name
                 type: string
             required:
             - vmName
             type: object
-          status:
-            properties:
-              ipAddress:
-                type: string
-            required:
-            - ipAddress
-            type: object
         required:
         - spec
-        - status
         type: object
     served: true
     storage: true
-    subresources:
-      status: {}

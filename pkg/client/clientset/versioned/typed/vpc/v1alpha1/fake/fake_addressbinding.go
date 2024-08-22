@@ -88,18 +88,6 @@ func (c *FakeAddressBindings) Update(ctx context.Context, addressBinding *v1alph
 	return obj.(*v1alpha1.AddressBinding), err
 }
 
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeAddressBindings) UpdateStatus(ctx context.Context, addressBinding *v1alpha1.AddressBinding, opts v1.UpdateOptions) (*v1alpha1.AddressBinding, error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewUpdateSubresourceAction(addressbindingsResource, "status", c.ns, addressBinding), &v1alpha1.AddressBinding{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1alpha1.AddressBinding), err
-}
-
 // Delete takes name of the addressBinding and deletes it. Returns an error if one occurs.
 func (c *FakeAddressBindings) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.

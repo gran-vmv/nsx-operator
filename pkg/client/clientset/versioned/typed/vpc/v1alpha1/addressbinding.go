@@ -27,7 +27,6 @@ type AddressBindingsGetter interface {
 type AddressBindingInterface interface {
 	Create(ctx context.Context, addressBinding *v1alpha1.AddressBinding, opts v1.CreateOptions) (*v1alpha1.AddressBinding, error)
 	Update(ctx context.Context, addressBinding *v1alpha1.AddressBinding, opts v1.UpdateOptions) (*v1alpha1.AddressBinding, error)
-	UpdateStatus(ctx context.Context, addressBinding *v1alpha1.AddressBinding, opts v1.UpdateOptions) (*v1alpha1.AddressBinding, error)
 	Delete(ctx context.Context, name string, opts v1.DeleteOptions) error
 	DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error
 	Get(ctx context.Context, name string, opts v1.GetOptions) (*v1alpha1.AddressBinding, error)
@@ -116,22 +115,6 @@ func (c *addressBindings) Update(ctx context.Context, addressBinding *v1alpha1.A
 		Namespace(c.ns).
 		Resource("addressbindings").
 		Name(addressBinding.Name).
-		VersionedParams(&opts, scheme.ParameterCodec).
-		Body(addressBinding).
-		Do(ctx).
-		Into(result)
-	return
-}
-
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *addressBindings) UpdateStatus(ctx context.Context, addressBinding *v1alpha1.AddressBinding, opts v1.UpdateOptions) (result *v1alpha1.AddressBinding, err error) {
-	result = &v1alpha1.AddressBinding{}
-	err = c.client.Put().
-		Namespace(c.ns).
-		Resource("addressbindings").
-		Name(addressBinding.Name).
-		SubResource("status").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(addressBinding).
 		Do(ctx).
