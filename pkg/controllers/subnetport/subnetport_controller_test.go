@@ -282,6 +282,9 @@ func TestSubnetPortReconciler_Reconcile(t *testing.T) {
 			return nil
 		})
 	defer patchesDeleteSubnetPortById.Reset()
+	patches := gomonkey.ApplyPrivateMethod(r, "setAddressBindingStatusBySubnetPort", func(r *SubnetPortReconciler, ctx context.Context, subnetPort *v1alpha1.SubnetPort, transitionTime metav1.Time, e error) {
+	})
+	defer patches.Reset()
 	_, ret = r.Reconcile(ctx, req)
 	assert.Equal(t, nil, ret)
 }
@@ -329,6 +332,8 @@ func TestSubnetPortReconciler_GarbageCollector(t *testing.T) {
 		a.Items[0].Name = "subnetPort1"
 		return nil
 	})
+	patches := gomonkey.ApplyPrivateMethod(r, "collectAddressBindingGarbage", func(r *SubnetPortReconciler, _ context.Context) {})
+	defer patches.Reset()
 	r.CollectGarbage(context.Background())
 }
 
@@ -549,8 +554,10 @@ func TestSubnetPortReconciler_updateSuccess(t *testing.T) {
 
 	fakewriter := fakeStatusWriter{}
 	k8sClient.EXPECT().Status().Return(fakewriter)
-	k8sClient.EXPECT().Status().Return(fakewriter)
 
+	patches := gomonkey.ApplyPrivateMethod(r, "setAddressBindingStatusBySubnetPort", func(r *SubnetPortReconciler, ctx context.Context, subnetPort *v1alpha1.SubnetPort, transitionTime metav1.Time, e error) {
+	})
+	defer patches.Reset()
 	updateSuccess(r, context.TODO(), &v1alpha1.SubnetPort{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "ns",
@@ -591,6 +598,9 @@ func TestSubnetPortReconciler_updateFail(t *testing.T) {
 	k8sClient.EXPECT().Status().Return(fakewriter)
 
 	err := fmt.Errorf("mock error")
+	patches := gomonkey.ApplyPrivateMethod(r, "setAddressBindingStatusBySubnetPort", func(r *SubnetPortReconciler, ctx context.Context, subnetPort *v1alpha1.SubnetPort, transitionTime metav1.Time, e error) {
+	})
+	defer patches.Reset()
 	updateFail(r, context.TODO(), &v1alpha1.SubnetPort{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "ns",
@@ -1009,16 +1019,9 @@ func TestSubnetPortReconciler_addressBindingMapFunc(t *testing.T) {
 		obj            client.Object
 	}{
 		{
-			name: "AddressBindingExisted",
-			prepareFunc: func(t *testing.T, spr *SubnetPortReconciler) *gomonkey.Patches {
-				k8sClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
-				return nil
-			},
-			obj: &v1alpha1.AddressBinding{
-				Status: v1alpha1.AddressBindingStatus{
-					IPAddress: "10.0.0.1",
-				},
-			},
+			name:        "AddressBindingInvalid",
+			prepareFunc: func(t *testing.T, spr *SubnetPortReconciler) *gomonkey.Patches { return nil },
+			obj:         &v1alpha1.SubnetPort{},
 		},
 		{
 			name: "DefaultAddressBinding",
@@ -1083,6 +1086,76 @@ func TestSubnetPortReconciler_addressBindingMapFunc(t *testing.T) {
 			}
 			reqs := r.addressBindingMapFunc(context.TODO(), tt.obj)
 			assert.Equal(t, tt.expectedResult, reqs)
+		})
+	}
+}
+
+func TestSubnetPortReconciler_setAddressBindingStatusBySubnetPort(t *testing.T) {
+	type args struct {
+		subnetPort     *v1alpha1.SubnetPort
+		transitionTime metav1.Time
+		e              error
+	}
+	tests := []struct {
+		name        string
+		prepareFunc func(r *SubnetPortReconciler) *gomonkey.Patches
+		args        args
+	}{
+		{
+			name: "NoAddressBinding",
+			prepareFunc: func(r *SubnetPortReconciler) *gomonkey.Patches {
+				patches := gomonkey.ApplyMethodSeq(r.SubnetPortService.SubnetPortStore, "GetByKey", []gomonkey.OutputCell{{
+					Values: gomonkey.Params{nil},
+					Times:  1,
+				}})
+				patches.ApplyMethodSeq(r.SubnetPortService, "GetAddressBindingBySubnetPort", []gomonkey.OutputCell{{
+					Values: gomonkey.Params{nil},
+					Times:  1,
+				}})
+				return patches
+			},
+			args: args{
+				subnetPort:     &v1alpha1.SubnetPort{},
+				transitionTime: metav1.Now(),
+				e:              nil,
+			},
+		},
+		{
+			name: "NoSubnetPort",
+			prepareFunc: func(r *SubnetPortReconciler) *gomonkey.Patches {
+				patches := gomonkey.ApplyMethodSeq(r.SubnetPortService.SubnetPortStore, "GetByKey", []gomonkey.OutputCell{{
+					Values: gomonkey.Params{nil},
+					Times:  1,
+				}})
+				patches.ApplyMethodSeq(r.SubnetPortService, "GetAddressBindingBySubnetPort", []gomonkey.OutputCell{{
+					Values: gomonkey.Params{&v1alpha1.AddressBinding{ObjectMeta: metav1.ObjectMeta{Name: "ab1", Namespace: "ns1"}}},
+					Times:  1,
+				}})
+				patches.ApplyPrivateMethod(r, "setAddressBindingStatus", func(r *SubnetPortReconciler, ctx context.Context, ab *v1alpha1.AddressBinding, transitionTime metav1.Time, e error, ipAddress string) {
+					assert.Equal(t, &v1alpha1.AddressBinding{ObjectMeta: metav1.ObjectMeta{Name: "ab1", Namespace: "ns1"}}, ab)
+					assert.Equal(t, metav1.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), transitionTime)
+					assert.Equal(t, fmt.Errorf("missing SubnetPort"), e)
+					assert.Equal(t, "", ipAddress)
+				})
+				return patches
+			},
+			args: args{
+				subnetPort:     &v1alpha1.SubnetPort{},
+				transitionTime: metav1.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+				e:              nil,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &SubnetPortReconciler{
+				SubnetPortService: &subnetport.SubnetPortService{SubnetPortStore: &subnetport.SubnetPortStore{}},
+			}
+			patches := tt.prepareFunc(r)
+			if patches != nil {
+				defer patches.Reset()
+			}
+			r.setAddressBindingStatusBySubnetPort(context.TODO(), tt.args.subnetPort, tt.args.transitionTime, tt.args.e)
 		})
 	}
 }
